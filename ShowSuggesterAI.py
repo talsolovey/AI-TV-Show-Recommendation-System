@@ -1,9 +1,12 @@
+import numpy as np
 from openai import OpenAI
 import os
 import openai
 import pandas as pd
 import pickle
 import logging
+from rapidfuzz import process
+from sklearn.metrics.pairwise import cosine_similarity
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -44,14 +47,36 @@ def load_embeddings(file_path):
     logging.info(f"Loaded embeddings from {file_path}")
     return embeddings
 
-def validate_user_input(user_shows, available_shows):
-    raise NotImplementedError("This method is not yet implemented")
+def validate_user_input(input_shows, available_shows):
+    corrected_shows = []
+    for show in input_shows:
+        match = process.extractOne(show, available_shows)
+        if match and match[1] > 70:  # Lowered threshold to 70% to be more lenient
+            corrected_shows.append(match[0])
+            logging.info(f"Input '{show}' matched to '{match[0]}' with confidence {match[1]}%.")
+        else:
+            logging.warning(f"Input '{show}' did not match any available shows.")
+    if not corrected_shows:
+        return None  # Return None if no matches were found
+    return corrected_shows
 
 def calculate_user_vector(selected_shows, embeddings):
-    raise NotImplementedError("This method is not yet implemented")
+    vectors = [embeddings[show] for show in selected_shows if show in embeddings]
+    if not vectors:
+        logging.error("No valid shows found in embeddings.")
+        return None
+    logging.info(f"Calculating user vector based on selected shows: {selected_shows}")
+    return np.mean(vectors, axis=0)
 
 def generate_recommendations(user_vector, show_vectors, show_titles, top_n=5):
-    raise NotImplementedError("This method is not yet implemented")
+    if user_vector is None:
+        logging.error("User vector is None. Cannot generate recommendations.")
+        return []
+    similarities = cosine_similarity([user_vector], show_vectors)[0]
+    sorted_indices = np.argsort(similarities)[::-1][:top_n]
+    recommendations = [(show_titles[i], round(similarities[i] * 100, 2)) for i in sorted_indices]
+    logging.info(f"Generated top {top_n} recommendations.")
+    return recommendations
 
 
 def main():

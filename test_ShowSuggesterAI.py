@@ -19,7 +19,7 @@ def sample_embeddings():
 # Load Embeddings Tests
 def test_load_embeddings_returns_dict(tmp_path):
     embeddings = {"Game of Thrones": [0.1, 0.2, 0.3]}
-    file_path = tmp_path / "embeddings.pkl"
+    file_path = "embeddings.pkl"
     with open(file_path, 'wb') as f:
         pickle.dump(embeddings, f)
     loaded_embeddings = load_embeddings(file_path)
