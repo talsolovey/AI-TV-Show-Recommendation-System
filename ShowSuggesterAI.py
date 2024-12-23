@@ -1,3 +1,4 @@
+import time
 import numpy as np
 from openai import OpenAI
 import os
@@ -8,6 +9,7 @@ import logging
 from rapidfuzz import process
 from sklearn.metrics.pairwise import cosine_similarity
 import requests
+import json
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -131,12 +133,14 @@ def generate_lightx_images(show1name, show1description, show2name, show2descript
     logging.info("Generating LightX images for two fictional shows...")
 
     # Retrieve API key from environment variable
-    api_key = os.getenv('X_API_KEY')
+    api_key = os.getenv('LIGHTX_API_KEY')
     if not api_key:
         logging.error("LightX API key is not set in environment variables")
 
     # LightX API endpoint
-    url = 'https://api.lightxeditor.com/external/api/v1/text2image'
+    text2image_url = 'https://api.lightxeditor.com/external/api/v1/text2image'
+    # Order status endpoint
+    order_status_url = "https://api.lightxeditor.com/external/api/v1/order-status"
 
     headers = {
         'Content-Type': 'application/json',
@@ -151,49 +155,84 @@ def generate_lightx_images(show1name, show1description, show2name, show2descript
     )
 
     prompt_show2 = (
-        f"Create a dynamic, cinematic poster or ad for a TV show named '{show2name}' "
-        f"that is about '{show2description}'. "
-        "Include neon lighting effects for a modern, futuristic vibe."
+        f"Design a captivating poster or ad for a TV show called '{show2name}' "
+        f"that is inspired by '{show2description}'. "
+        "The show features a mix of mystery, intrigue, and action."
     )
 
-    headers = {
-        'Content-Type': 'application/json',
-        'x-api-key': api_key
-    }
+    # helper function to send a request to LightX API
+    def send_lightx_request(prompt):
+        """
+        Calls the LightX API with the given prompt and returns the image URL.
+        """
+        data = {"textPrompt": prompt}
 
-    # 1) Generate image for Show #1
-    logging.info(f"Sending Show #1 prompt to LightX: {prompt_show1}")
-    response1 = requests.post(url, headers=headers, json={"textPrompt": prompt_show1})
-    if response1.status_code == 200:
         try:
-            data1 = response1.json()
-            show1_image_path = data1.get("imageUrl", "show1_ad_no_url.jpg")
-            logging.info(f"LightX success for Show #1. Image URL: {show1_image_path}")
-        except ValueError as e:
-            logging.error("Failed to parse JSON from LightX response for Show #1.")
-            logging.error(str(e))
-    else:
-        logging.error(f"LightX generation for Show #1 failed: {response1.status_code}")
-        logging.error(response1.text)
+            logging.info(f"Sending request to text2image with prompt: {prompt}")
+            response = requests.post(text2image_url, headers=headers, json=data)
+            
+            if response.status_code == 200:
+                data = response.json()
+                if data.get("statusCode") == 2000:
+                    body = data.get("body", {})
+                    order_id = body.get("orderId")
+                if not order_id:
+                    logging.error("No 'orderId' in text2image response.")
+                    return ""
+                logging.info(f"Order created successfully. orderId={order_id}")
+                return order_id
+            else:
+                logging.error(f"text2image request failed: {response.status_code} {response.text}")
+                return ""
+        except Exception as e:
+            logging.error(f"Exception during create_order: {e}")
+            return ""
     
-    # 2) Generate image for Show #2
-    logging.info(f"Sending Show #2 prompt to LightX: {prompt_show2}")
-    response2 = requests.post(url, headers=headers, json={"textPrompt": prompt_show2})
-    if response2.status_code == 200:
-        try:
-            data2 = response2.json()
-            show2_image_path = data2.get("imageUrl", "show2_ad_no_url.jpg")
-            logging.info(f"LightX success for Show #2. Image URL: {show2_image_path}")
-        except ValueError as e:
-            logging.error("Failed to parse JSON from LightX response for Show #2.")
-            logging.error(str(e))
-    else:
-        logging.error(f"LightX generation for Show #2 failed: {response2.status_code}")
-        logging.error(response2.text)
+    # helper function to retrieve the image URL
+    def retrieve_image_url(order_id):
+        """
+        Retrieves the image URL for a given order ID.
+        """
+        payload = {"orderId": order_id}
 
-    # Return paths/URLs
-    return show1_image_path, show2_image_path
+        max_retries = 5
+        for attempt in range(1, max_retries + 1):
+            logging.info(f"Attempt {attempt} of {max_retries}: Checking order status for orderId={order_id}")
+            try:
+                response = requests.post(order_status_url, headers=headers, data=json.dumps(payload))
 
+                if response.status_code == 200:
+                    data = response.json()
+
+                    # Check if the request to LightX was successful
+                    if data.get("statusCode") == 2000:
+                        body = data.get("body", {})
+                        current_status = body.get("status")
+                        logging.info(f"Current status: {current_status}")
+
+                        # If status is active or failed, return immediately
+                        if current_status in ["active", "failed"]:
+                            output_url = body.get("output")
+                            if not output_url:
+                                logging.error(f"Failed to retrieve output URL for order ID: {order_id}")
+                                return None
+                            return output_url
+                        else:
+                            # sleep 3s, then retry
+                            time.sleep(3)
+            except Exception as e:
+                logging.error(f"Exception during retrieve_image_url: {e}")
+                return None
+
+    # Send requests for both shows
+    show1_order_id = send_lightx_request(prompt_show1)
+    show2_order_id = send_lightx_request(prompt_show2)
+
+    # Retrieve image URLs
+    show1_image_url = retrieve_image_url(show1_order_id)
+    show2_image_url = retrieve_image_url(show2_order_id)
+
+    return show1_image_url, show2_image_url
 
 
 def main():
@@ -205,10 +244,12 @@ def main():
     4) Print recommended shows
     5) Print two newly created shows + show ads
     """
+
+    # Paths
     pickle_file_path = "embeddings.pkl"
     csv_file_path = "imdb_tvshows.csv"
 
-    # STEP: Attempt to load embeddings; if not found, generate them
+    # Attempt to load embeddings; if not found, generate them
     try:
         embeddings = load_embeddings(pickle_file_path)
     except FileNotFoundError:
@@ -217,6 +258,78 @@ def main():
 
     show_titles = list(embeddings.keys())
 
+    # Repeat until user confirms
+    while True:
+        user_input = input("Which TV shows did you really like watching? Separate them by a comma."
+                           "Make sure to enter more than 1 show:\n")
+        user_shows_raw = [s.strip() for s in user_input.split(",")]
+
+        if len(user_shows_raw) < 2:
+            print("Please enter more than one show. Let's try again.\n")
+            continue
+
+         # Fuzzy match
+        corrected_shows = validate_user_input(user_shows_raw, show_titles)
+        if corrected_shows:
+            # Confirm
+            print(f"\nMaking sure, do you mean {', '.join(corrected_shows)}? (y/n)")
+            confirmation = input().lower().strip()
+            if confirmation == 'y':
+                user_shows = corrected_shows
+                break
+        print("\nSorry about that. Let's try again, please make sure to write the names of the TV shows correctly.\n")
+
+    print("\nGreat! Generating recommendations now...\n")
+
+    # Calculate user vector
+    user_vector = calculate_user_vector(user_shows, embeddings)
+    if user_vector is None:
+        print("No valid user shows found. Exiting.")
+        return
+    
+    # Prepare data for recommendations
+    show_vectors = list(embeddings.values())
+    show_titles_list = list(embeddings.keys())
+
+    # Generate top 5 recommendations
+    recommendations = generate_recommendations(
+        user_vector=user_vector,
+        show_vectors=show_vectors,
+        show_titles=show_titles_list,
+        excluded_titles=user_shows, # Exclude user's input shows
+        top_n=5
+    )
+
+    # Step #4: Print the recommended shows in the desired format
+    print("Here are the TV shows that I think you would love:")
+    for show_title, score in recommendations:
+        print(f"{show_title} ({round(score, 2)}%)")
+
+    # Step #5: Create two fictional shows and generate LightX image ads
+    # Show #1: based on user input
+    show1_basis = user_shows[0]
+    show1name, show1description = create_fictional_show_name_and_description(user_shows[0])
+
+    # Show #2: based on the first recommended show
+    show2_basis = recommendations[0][0]
+    show2name, show2description = create_fictional_show_name_and_description(recommendations)
+
+    show1_ad_path = generate_lightx_images(
+        show1name, show1description
+    )
+    show2_ad_path = generate_lightx_images(
+        show2name, show2description
+    )
+
+    print("\nI have also created just for you two shows which I think you would love.")
+    print("Show #1 is based on the fact that you loved the input shows that you gave me.")
+    print(f"Its name is {show1name} and it is about {show1description}.")
+    print("Show #2 is based on the shows that I recommended for you.")
+    print(f"Its name is {show2name} and it is about {show2description}.")
+
+    print("Here are also the 2 TV show ads. Hope you like them!")
+    print(f" - Ad for Show #1 is saved at: {show1_ad_path}")
+    print(f" - Ad for Show #2 is saved at: {show2_ad_path}")
 
 if __name__ == "__main__":
     main()
