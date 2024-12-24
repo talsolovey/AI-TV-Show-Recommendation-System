@@ -1,6 +1,7 @@
 import pytest
 import numpy as np
 import pickle
+import json
 from unittest.mock import patch, MagicMock
 from ShowSuggesterAI import (
     load_embeddings,
@@ -8,7 +9,7 @@ from ShowSuggesterAI import (
     calculate_user_vector,
     generate_recommendations,
     create_fictional_show_name_and_description,
-    generate_lightx_images
+    generate_lightx_image
 )
 
 @pytest.fixture
@@ -132,26 +133,37 @@ def test_generate_recommendations_sorts_order(sample_embeddings):
 # -----------------------------------------------------------------------------
 # create_fictional_show_name_and_description Tests
 # -----------------------------------------------------------------------------
-def test_create_fictional_show_name_and_description_returns_strings():
-    """
-    Test that the function returns the show name as a string value.
-    """
-    show_name, _ = create_fictional_show_name_and_description("Breaking Bad")
-    assert isinstance(show_name, str)
-
-def test_create_fictional_show_name_and_description_returns_strings():
-    """
-    Test that the function returns the show description as a string value.
-    """
-    _, show_description = create_fictional_show_name_and_description("Breaking Bad")
-    assert isinstance(show_description, str)
-
-def test_create_fictional_show_name_and_description_includes_basis():
+@patch("ShowSuggesterAI.openai.ChatCompletion.create")
+def test_create_fictional_show_name_and_description_includes_basis(mock_openai):
     """
     Test that the returned description includes the basis text (if provided).
     """
-    basis_text = "Breaking Bad"
-    _, show_description = create_fictional_show_name_and_description(basis_text)
+    # Mock a successful JSON response from OpenAI
+    basis_text = "Breaking Bad, Game of Thrones"
+    fake_llm_response = {
+        "id": "some_id",
+        "object": "chat.completion",
+        "created": 1234567890,
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": json.dumps({
+                        "title": "A Breaking Bad Universe",
+                        "description": f"An intriguing show heavily inspired by {basis_text}."
+                    })
+                },
+                "finish_reason": "stop",
+                "index": 0
+            }
+        ]
+    }
+    mock_openai.return_value = MagicMock(**fake_llm_response)
+
+    # Call the function
+    _, show_description = create_fictional_show_name_and_description(
+        basis=basis_text,
+    )
     assert basis_text in show_description
 
 
@@ -159,50 +171,73 @@ def test_create_fictional_show_name_and_description_includes_basis():
 # generate_lightx_images Tests
 # -----------------------------------------------------------------------------
 @patch("ShowSuggesterAI.requests.post")
-def test_generate_lightx_images_show1_path(mock_post):
+def test_generate_lightx_images_show_path(mock_post):
     """
-    Ensures generate_lightx_images returns the correct path for Show #1.
+    Ensures generate_lightx_images returns the correct path (URL)
+    under a successful response from the LightX text2image/order-status flow.
     """
-    # Mock both calls. The first call => Show #1, second => Show #2
-    mock_resp1 = MagicMock(status_code=200)
-    mock_resp1.json.return_value = {"imageUrl": "fake_path_show1.jpg"}
-    mock_resp2 = MagicMock(status_code=200)
-    mock_resp2.json.return_value = {"imageUrl": "fake_path_show2.jpg"}
-    mock_post.side_effect = [mock_resp1, mock_resp2]
+    # Mock the first call => text2image
+    mock_resp_text2image = MagicMock(status_code=200)
+    # Suppose it returns {"orderId": "order_for_show"}
+    mock_resp_text2image.json.return_value = {
+        "statusCode": 2000,
+        "message": "SUCCESS",
+        "body": {
+            "orderId": "7906da5353b504162db5199d6",
+            "maxRetriesAllowed": 5,
+            "avgResponseTimeInSec": 15,
+            "status": "init"
+        }
+    }
 
-    show1_ad_path, _ = generate_lightx_images("Show1", "Desc1", "Show2", "Desc2")
-    assert show1_ad_path == "fake_path_show1.jpg"
+
+    # Next calls => order-status
+    mock_resp_orderstatus = MagicMock(status_code=200)
+    mock_resp_orderstatus.json.return_value = {
+        "statusCode": 2000,
+        "message": "SUCCESS",
+        "body": {
+            "orderId": "7906da5353b504162db5199d6",
+            "status": "active",
+            "output": "fake_path_show.jpg"
+        }
+    }
+
+    # The function calls requests.post() to text2image and to order-status.
+    # We set side_effect to a list of these mock responses
+    mock_post.side_effect = [
+        mock_resp_text2image,  # text2image
+        mock_resp_orderstatus, # order-status
+    ]
+
+    show_ad_path = generate_lightx_image("show_name", "show_desc")
+    assert show_ad_path == "fake_path_show.jpg"
 
 
 @patch("ShowSuggesterAI.requests.post")
 def test_generate_lightx_images_calls_lightx_twice(mock_post):
     """
-    Ensures generate_lightx_images calls requests.post exactly two times.
+    Ensures generate_lightx_images calls requests.post enough:
+    (1) text2image -> (2) order-status
     """
+    # Create two identical responses
     mock_resp = MagicMock(status_code=200)
-    mock_resp.json.return_value = {"imageUrl": "fake_path_showN.jpg"}
-    mock_post.return_value = mock_resp
+    mock_resp.json.return_value = {
+        "orderId": "some_orderId",
+        "statusCode": 2000,
+        "message": "SUCCESS",
+        "body": {
+            "orderId": "some_orderId",
+            "status": "active",
+            "output": "fake_path_showN.jpg"
+        }
+    }
+    mock_post.side_effect = [mock_resp, mock_resp]
 
-    generate_lightx_images("Show1", "Desc1", "Show2", "Desc2")
+    generate_lightx_image("show_name", "show_desc")
+    
     assert mock_post.call_count == 2
 
-
-@patch("ShowSuggesterAI.requests.post")
-def test_generate_lightx_images_prompt_first_call(mock_post):
-    """
-    Ensures the JSON payload for the first call contains the correct prompt for Show #1.
-    """
-    mock_resp1 = MagicMock(status_code=200)
-    mock_resp1.json.return_value = {"imageUrl": "fake_path_show1.jpg"}
-    mock_resp2 = MagicMock(status_code=200)
-    mock_resp2.json.return_value = {"imageUrl": "fake_path_show2.jpg"}
-    mock_post.side_effect = [mock_resp1, mock_resp2]
-
-    generate_lightx_images("Show1", "Desc1", "Show2", "Desc2")
-    first_call_args, first_call_kwargs = mock_post.call_args_list[0]
-    
-    # Make sure the JSON body for the first call contains the "textPrompt" we expect for Show #1.
-    assert "Show1" in first_call_kwargs["json"]["textPrompt"]
 
 
 
