@@ -15,7 +15,8 @@ import requests
 import json
 
 # Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.WARNING, format='%(asctime)s - %(levelname)s - %(message)s')
+
 
 def generate_embeddings(file_path): 
     """
@@ -51,6 +52,7 @@ def generate_embeddings(file_path):
     logging.info("Embeddings generated and saved to embeddings.pkl")
     return embeddings
 
+
 def load_embeddings(file_path):
     """
     Loads and returns a dictionary of embeddings from a pickle file.
@@ -59,6 +61,7 @@ def load_embeddings(file_path):
         embeddings = pickle.load(f)
     logging.info(f"Loaded embeddings from {file_path}")
     return embeddings
+
 
 def validate_user_input(input_shows, available_shows):
     """
@@ -77,6 +80,7 @@ def validate_user_input(input_shows, available_shows):
         return None  # Return None if no matches were found
     return corrected_shows
 
+
 def calculate_user_vector(selected_shows, embeddings):
     """
     Given a list of confirmed show names and their embeddings,
@@ -94,6 +98,7 @@ def calculate_user_vector(selected_shows, embeddings):
     logging.info(f"Calculating user vector based on selected shows: {selected_shows}")
     return np.mean(vectors, axis=0)
 
+
 def generate_recommendations(user_vector, show_vectors, show_titles, excluded_titles, top_n=5):
     """
     Given a user vector, list of show vectors, and corresponding show titles,
@@ -107,14 +112,26 @@ def generate_recommendations(user_vector, show_vectors, show_titles, excluded_ti
     # Compute cosine similarity for each show
     similarities = cosine_similarity([user_vector], show_vectors)[0]
 
-    # Convert similarity to a percentage and then we sort them (descending).
-    show_scores = [(title, similarities[i] * 100) for i, title in enumerate(show_titles)]
+    # Scale the similarities so that min -> 0%, max -> 100%
+    min_sim = float(np.min(similarities))
+    max_sim = float(np.max(similarities))
 
-    # Exclude user’s input shows + sort in descending order of similarity
+    # Avoid divide-by-zero if all similarities are the same
+    if max_sim > min_sim:
+        scaled_sims = [(sim - min_sim) / (max_sim - min_sim) for sim in similarities]
+    else:
+        # If all similarities are identical, just set them all to 1.0 or 0.5, etc.
+        scaled_sims = [1.0 for _ in similarities]
+
+    # Convert similarity to a percentage
+    show_scores = [(title, scaled_sims[i] * 100) for i, title in enumerate(show_titles)]
+
+    # Exclude the user’s input shows
     show_scores = [item for item in show_scores if item[0] not in excluded_titles]
+
+    # Sort in descending order of the scaled similarity
     show_scores.sort(key=lambda x: x[1], reverse=True)
 
-    # Take the top_n
     return show_scores[:top_n]
     
 
@@ -179,6 +196,7 @@ def create_fictional_show_name_and_description(basis):
     except Exception as ex:
         logging.error(f"Error calling OpenAI ChatCompletion: {ex}")
         return default_show
+
 
 def generate_lightx_image(show_name, show_description):
     """
@@ -279,6 +297,7 @@ def generate_lightx_image(show_name, show_description):
     show_image_url = retrieve_image_url(show_order_id)
 
     return show_image_url
+
 
 def download_and_open_imageURL(image_url, filename):
     """
