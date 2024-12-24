@@ -221,9 +221,11 @@ def generate_lightx_image(show_name, show_description):
 
     # Build the prompts for each show
     prompt_show = (
-        f"Create an eye-catching poster or ad for a TV show titled '{show_name}' "
-        f"that is about '{show_description}'. "
-        "Use a cinematic style with bold, striking visuals."
+        f"Design a bold, cinematic poster for the new TV show '{show_name}'. "
+        f"Feature the title prominently and depict the key characters in a dramatic pose, "
+        f"reflecting the storyline: '{show_description}'. "
+        "Use striking visuals, high-contrast lighting, and include a short, catchy tagline "
+        "that teases the main theme."
     )
 
     # helper function to send a request to LightX API
